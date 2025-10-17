@@ -1,5 +1,6 @@
 #api for 240604 release version by Xiaokai
 import os
+import io
 import sys
 import json
 import re
@@ -13,6 +14,7 @@ import sounddevice as sd
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 import threading
 import uvicorn
@@ -291,8 +293,7 @@ class AudioAPI:
         ).to(self.config.device)
 
         if input_file_path:
-            output_file_path = input_file_path.replace(".wav", "_out.wav") 
-            return self.process_audio_file(audio_data, output_file_path)
+            return self.process_audio_file(audio_data)
         else:
             thread_vc = threading.Thread(target=self.soundinput)
             thread_vc.start()
@@ -493,23 +494,26 @@ class AudioAPI:
         logger.debug(f"Selected input device: {input_device}")
         logger.debug(f"Selected output device: {output_device}")
 
-        if input_device not in input_devices:
+        if input_device in input_devices:
+            sd.default.device[0] = input_device_indices[input_devices.index(input_device)]
+            logger.info(f"Input device set to {sd.default.device[0]}: {input_device}")
+        else:
             logger.error(f"Input device '{input_device}' is not in the list of available devices")
-            raise HTTPException(status_code=400, detail=f"Input device '{input_device}' is not available")
+            # raise HTTPException(status_code=400, detail=f"Input device '{input_device}' is not available")
         
-        if output_device not in output_devices:
+        if output_device in output_devices:
+            sd.default.device[1] = output_device_indices[output_devices.index(output_device)]
+            logger.info(f"Output device set to {sd.default.device[1]}: {output_device}")
+        else:
             logger.error(f"Output device '{output_device}' is not in the list of available devices")
-            raise HTTPException(status_code=400, detail=f"Output device '{output_device}' is not available")
+            # raise HTTPException(status_code=400, detail=f"Output device '{output_device}' is not available")
 
-        sd.default.device[0] = input_device_indices[input_devices.index(input_device)]
-        sd.default.device[1] = output_device_indices[output_devices.index(output_device)]
-        logger.info(f"Input device set to {sd.default.device[0]}: {input_device}")
-        logger.info(f"Output device set to {sd.default.device[1]}: {output_device}")
-
-
-    def process_audio_file(self, audio_data: np.ndarray, output_file_path: str):
-        
-        # 如果是单声道，则转换为双声道；如果是单列二维数组也处理；如果多于2通道则取前两通道
+    def process_audio_file(self, audio_data: np.ndarray):
+        """
+        按 block_frame 分帧处理音频数据，调用 audio_callback，
+        逐块 yield 处理后的音频，不保存文件。
+        """
+        # ---------- 1. 确保双声道 ----------
         if audio_data.ndim == 1:
             audio_data = np.column_stack((audio_data, audio_data))
         elif audio_data.ndim == 2 and audio_data.shape[1] == 1:
@@ -517,51 +521,43 @@ class AudioAPI:
         elif audio_data.ndim == 2 and audio_data.shape[1] > 2:
             audio_data = audio_data[:, :2]
 
-        # 确保数据类型为float32（如果原始文件是int16，我们需要转换）
+        # ---------- 2. 确保 float32 ----------
         if audio_data.dtype == np.int16:
-            audio_data = audio_data.astype(np.float32) / 32768  # 将int16数据转换为float32
-        
+            audio_data = audio_data.astype(np.float32) / 32768
+
+        total_frames = len(audio_data)
+        frame_index = 0
+
+        # ---------- 3. 分帧处理 ----------
         # 用于存储所有输出数据的列表
         output_data = []
-        
-        # 模拟流处理：手动调用回调函数
-        frame_index = 0
-        total_frames = len(audio_data)
-        
         while frame_index < total_frames:
-            # 获取当前帧，确保不超过总长度
             end_index = min(frame_index + self.block_frame, total_frames)
             current_frame = audio_data[frame_index:end_index]
 
-            # 如果当前帧的大小不足 block_frame，进行填充
+            # 填充不足 block_frame 的帧
             if len(current_frame) < self.block_frame:
-                # 填充零，扩展到 block_frame 大小
                 pad_len = self.block_frame - len(current_frame)
                 current_frame = np.pad(current_frame, ((0, pad_len), (0, 0)), mode='constant')
 
-            # 模拟回调的参数
+            # 输入输出数据
             indata = current_frame
-            outdata = np.zeros_like(indata)  # 保持原始通道数
+            outdata = np.zeros_like(indata)
 
-            print(f"indata shape: {indata.shape}, outdata shape: {outdata.shape}")
-
-            # 调用回调函数
+            # ---------- 4. 调用回调 ----------
             self.audio_callback(indata, outdata, len(current_frame), None, None)
-
-            # 将处理后的数据追加到 output_data 中
+            
             output_data.append(outdata)
-
-            # 更新frame_index
             frame_index = end_index
         
         # 将处理后的数据拼接成一个完整的音频
         output_data = np.concatenate(output_data, axis=0)
 
-        # 保存处理后的音频数据
-        sf.write(output_file_path, output_data, self.gui_config.samplerate)
-        logger.info(f"Processed audio saved to: {output_file_path}")
-
-        return output_file_path
+        # 返回处理后的音频数据
+        buf = io.BytesIO()
+        sf.write(buf, output_data, self.gui_config.samplerate, format='WAV')
+        buf.seek(0)
+        return Response(buf.read(), media_type="audio/wav")
     
     def get_device_samplerate(self):
         return int(
@@ -653,7 +649,7 @@ def stop_conversion():
         logger.error(f"Failed to stop conversion: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to stop conversion: {e}")
 
-@app.post("/convert_audio_file")
+@app.get("/convert_audio_file")
 def convert_audio_file(input_file_path: str):
     try:
         if not audio_api.flag_vc:
@@ -669,6 +665,21 @@ def convert_audio_file(input_file_path: str):
         raise HTTPException(status_code=500, detail="Failed to start conversion: {e}")
     finally:
         audio_api.flag_vc = False
+
+@app.get("/stream_latency", response_model=int)
+def get_stream_latency():
+    try:
+        global stream_latency
+        if "stream_latency" not in globals() or stream_latency is None or stream_latency == -1:
+            return -1
+        else:
+            return stream_latency * 1000
+    except HTTPException as e:
+        logger.error(f"get stream latency error: {e.detail}", exc_info=True)
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get stream latency: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get stream latency: {e}")
 
 if __name__ == "__main__":
     if sys.platform == "win32":
