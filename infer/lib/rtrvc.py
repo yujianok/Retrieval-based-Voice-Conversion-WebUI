@@ -16,6 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchcrepe
 from torchaudio.transforms import Resample
+from torch.serialization import safe_globals
 
 now_dir = os.getcwd()
 sys.path.append(now_dir)
@@ -96,18 +97,19 @@ class RVC:
             self.resample_kernel = {}
 
             if last_rvc is None:
-                models, _, _ = fairseq.checkpoint_utils.load_model_ensemble_and_task(
-                    ["assets/hubert/hubert_base.pt"],
-                    suffix="",
-                )
-                hubert_model = models[0]
-                hubert_model = hubert_model.to(self.device)
-                if self.is_half:
-                    hubert_model = hubert_model.half()
-                else:
-                    hubert_model = hubert_model.float()
-                hubert_model.eval()
-                self.model = hubert_model
+                with safe_globals([fairseq.data.dictionary.Dictionary]):
+                    models, _, _ = fairseq.checkpoint_utils.load_model_ensemble_and_task(
+                        ["assets/hubert/hubert_base.pt"],
+                        suffix="",
+                    )
+                    hubert_model = models[0]
+                    hubert_model = hubert_model.to(self.device)
+                    if self.is_half:
+                        hubert_model = hubert_model.half()
+                    else:
+                        hubert_model = hubert_model.float()
+                    hubert_model.eval()
+                    self.model = hubert_model
             else:
                 self.model = last_rvc.model
 

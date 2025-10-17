@@ -12,18 +12,27 @@ import torchaudio.transforms as tat
 import sounddevice as sd
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import threading
 import uvicorn
 import logging
 from multiprocessing import Queue, Process, cpu_count, freeze_support
+import soundfile as sf  # 用于保存音频文件
 
 # Initialize the logger
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Define FastAPI app
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class GUIConfig:
     def __init__(self) -> None:
@@ -31,7 +40,7 @@ class GUIConfig:
         self.index_path: str = ""
         self.pitch: int = 0
         self.formant: float = 0.0
-        self.sr_type: str = "sr_model"
+        self.sr_type: str = "sr_device"
         self.block_time: float = 0.25  # s
         self.threhold: int = -60
         self.crossfade_time: float = 0.05
@@ -165,11 +174,12 @@ class AudioAPI:
         self.gui_config.f0method = values.f0method
         return True
 
-    def start_vc(self):
+    def start_vc(self, input_file_path = None):
         torch.cuda.empty_cache()
         self.flag_vc = True
         self.rvc = rvc_for_realtime.RVC(
             self.gui_config.pitch,
+            self.gui_config.formant,
             self.gui_config.pth_path,
             self.gui_config.index_path,
             self.gui_config.index_rate,
@@ -179,11 +189,17 @@ class AudioAPI:
             self.config,
             self.rvc if self.rvc else None,
         )
-        self.gui_config.samplerate = (
-            self.rvc.tgt_sr
-            if self.gui_config.sr_type == "sr_model"
-            else self.get_device_samplerate()
-        )
+
+        if input_file_path:
+            audio_data, samplerate = sf.read(input_file_path)
+            self.gui_config.samplerate = samplerate
+        else:
+            self.gui_config.samplerate = (
+                self.rvc.tgt_sr
+                if self.gui_config.sr_type == "sr_model"
+                else self.get_device_samplerate()
+            )
+        
         self.zc = self.gui_config.samplerate // 100
         self.block_frame = (
             int(
@@ -273,24 +289,36 @@ class AudioAPI:
         self.tg = TorchGate(
             sr=self.gui_config.samplerate, n_fft=4 * self.zc, prop_decrease=0.9
         ).to(self.config.device)
-        thread_vc = threading.Thread(target=self.soundinput)
-        thread_vc.start()
+
+        if input_file_path:
+            output_file_path = input_file_path.replace(".wav", "_out.wav") 
+            return self.process_audio_file(audio_data, output_file_path)
+        else:
+            thread_vc = threading.Thread(target=self.soundinput)
+            thread_vc.start()
+        
 
     def soundinput(self):
-        channels = 1 if sys.platform == "darwin" else 2
-        with sd.Stream(
-            channels=channels,
-            callback=self.audio_callback,
-            blocksize=self.block_frame,
-            samplerate=self.gui_config.samplerate,
-            dtype="float32",
-        ) as stream:
-            global stream_latency
-            stream_latency = stream.latency[-1]
-            while self.flag_vc:
-                time.sleep(self.gui_config.block_time)
-                logger.info("Audio block passed.")
-        logger.info("Ending VC")
+        try:
+            channels = 1 if sys.platform == "darwin" else 2
+            with sd.Stream(
+                channels=channels,
+                callback=self.audio_callback,
+                blocksize=self.block_frame,
+                samplerate=self.gui_config.samplerate,
+                dtype="float32",
+            ) as stream:
+                global stream_latency
+                stream_latency = stream.latency[-1]
+                while self.flag_vc:
+                    time.sleep(self.gui_config.block_time)
+                    logger.info("Audio block passed.")
+        except Exception as e:
+            logger.exception(f"Audio stream error: {e}", exc_info=True)
+            # Ensure flag is cleared so caller knows VC stopped
+            self.flag_vc = False
+        finally:
+            logger.info("Ending VC")
 
     def audio_callback(self, indata: np.ndarray, outdata: np.ndarray, frames, times, status):
         start_time = time.perf_counter()
@@ -478,7 +506,86 @@ class AudioAPI:
         logger.info(f"Input device set to {sd.default.device[0]}: {input_device}")
         logger.info(f"Output device set to {sd.default.device[1]}: {output_device}")
 
+
+    def process_audio_file(self, audio_data: np.ndarray, output_file_path: str):
+        
+        # 如果是单声道，则转换为双声道；如果是单列二维数组也处理；如果多于2通道则取前两通道
+        if audio_data.ndim == 1:
+            audio_data = np.column_stack((audio_data, audio_data))
+        elif audio_data.ndim == 2 and audio_data.shape[1] == 1:
+            audio_data = np.repeat(audio_data, 2, axis=1)
+        elif audio_data.ndim == 2 and audio_data.shape[1] > 2:
+            audio_data = audio_data[:, :2]
+
+        # 确保数据类型为float32（如果原始文件是int16，我们需要转换）
+        if audio_data.dtype == np.int16:
+            audio_data = audio_data.astype(np.float32) / 32768  # 将int16数据转换为float32
+        
+        # 用于存储所有输出数据的列表
+        output_data = []
+        
+        # 模拟流处理：手动调用回调函数
+        frame_index = 0
+        total_frames = len(audio_data)
+        
+        while frame_index < total_frames:
+            # 获取当前帧，确保不超过总长度
+            end_index = min(frame_index + self.block_frame, total_frames)
+            current_frame = audio_data[frame_index:end_index]
+
+            # 如果当前帧的大小不足 block_frame，进行填充
+            if len(current_frame) < self.block_frame:
+                # 填充零，扩展到 block_frame 大小
+                pad_len = self.block_frame - len(current_frame)
+                current_frame = np.pad(current_frame, ((0, pad_len), (0, 0)), mode='constant')
+
+            # 模拟回调的参数
+            indata = current_frame
+            outdata = np.zeros_like(indata)  # 保持原始通道数
+
+            print(f"indata shape: {indata.shape}, outdata shape: {outdata.shape}")
+
+            # 调用回调函数
+            self.audio_callback(indata, outdata, len(current_frame), None, None)
+
+            # 将处理后的数据追加到 output_data 中
+            output_data.append(outdata)
+
+            # 更新frame_index
+            frame_index = end_index
+        
+        # 将处理后的数据拼接成一个完整的音频
+        output_data = np.concatenate(output_data, axis=0)
+
+        # 保存处理后的音频数据
+        sf.write(output_file_path, output_data, self.gui_config.samplerate)
+        logger.info(f"Processed audio saved to: {output_file_path}")
+
+        return output_file_path
+    
+    def get_device_samplerate(self):
+        return int(
+            sd.query_devices(device=sd.default.device[0])["default_samplerate"]
+        )
+
+
 audio_api = AudioAPI()
+
+@app.get("/config", response_model=ConfigData)
+def get_config():
+    try:
+        return audio_api.load()
+    except Exception as e:
+        logger.error(f"Failed to get config: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get config")
+
+@app.get("/cpu_count", response_model=int)
+def get_cpu_count():
+    try:
+        return audio_api.n_cpu
+    except Exception as e:
+        logger.error(f"Failed to get cup_count: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get cup_count")
 
 @app.get("/inputDevices", response_model=list)
 def get_input_devices():
@@ -486,7 +593,7 @@ def get_input_devices():
         input_devices, _, _, _ = audio_api.get_devices()
         return input_devices
     except Exception as e:
-        logger.error(f"Failed to get input devices: {e}")
+        logger.error(f"Failed to get input devices: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to get input devices")
 
 @app.get("/outputDevices", response_model=list)
@@ -495,7 +602,7 @@ def get_output_devices():
         _, output_devices, _, _ = audio_api.get_devices()
         return output_devices
     except Exception as e:
-        logger.error(f"Failed to get output devices: {e}")
+        logger.error(f"Failed to get output devices: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to get output devices")
 
 @app.post("/config")
@@ -510,10 +617,10 @@ def configure_audio(config_data: ConfigData):
             logger.info("Configuration set successfully")
             return {"message": "Configuration set successfully"}
     except HTTPException as e:
-        logger.error(f"Configuration error: {e.detail}")
+        logger.error(f"Configuration error: {e.detail}", exc_info=True)
         raise
     except Exception as e:
-        logger.error(f"Configuration failed: {e}")
+        logger.error(f"Configuration failed: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=f"Configuration failed: {e}")
 
 @app.post("/start")
@@ -526,29 +633,42 @@ def start_conversion():
             logger.warning("Audio conversion already running")
             raise HTTPException(status_code=400, detail="Audio conversion already running")
     except HTTPException as e:
-        logger.error(f"Start conversion error: {e.detail}")
+        logger.error(f"Start conversion error: {e.detail}", exc_info=True)
         raise
     except Exception as e:
-        logger.error(f"Failed to start conversion: {e}")
+        logger.error(f"Failed to start conversion: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to start conversion: {e}")
 
 @app.post("/stop")
 def stop_conversion():
     try:
-        if audio_api.flag_vc:
-            audio_api.flag_vc = False
-            global stream_latency
-            stream_latency = -1
-            return {"message": "Audio conversion stopped"}
-        else:
-            logger.warning("Audio conversion not running")
-            raise HTTPException(status_code=400, detail="Audio conversion not running")
+        audio_api.flag_vc = False
+        global stream_latency
+        stream_latency = -1
+        return {"message": "Audio conversion stopped"}
     except HTTPException as e:
-        logger.error(f"Stop conversion error: {e.detail}")
+        logger.error(f"Stop conversion error: {e.detail}", exc_info=True)
         raise
     except Exception as e:
-        logger.error(f"Failed to stop conversion: {e}")
+        logger.error(f"Failed to stop conversion: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to stop conversion: {e}")
+
+@app.post("/convert_audio_file")
+def convert_audio_file(input_file_path: str):
+    try:
+        if not audio_api.flag_vc:
+            return audio_api.start_vc(input_file_path)
+        else:
+            logger.warning("Audio conversion already running")
+            raise HTTPException(status_code=400, detail="Audio conversion already running")
+    except HTTPException as e:
+        logger.error(f"Start conversion error: {e.detail}", exc_info=True)
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start conversion: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to start conversion: {e}")
+    finally:
+        audio_api.flag_vc = False
 
 if __name__ == "__main__":
     if sys.platform == "win32":
@@ -557,8 +677,12 @@ if __name__ == "__main__":
     os.environ["OMP_NUM_THREADS"] = "4"
     if sys.platform == "darwin":
         os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+    
+    now_dir = os.getcwd()
+    sys.path.append(now_dir)
+
     from tools.torchgate import TorchGate
-    import tools.rvc_for_realtime as rvc_for_realtime
+    from infer.lib import rtrvc as rvc_for_realtime
     from configs.config import Config
     audio_api.config = Config()
     audio_api.initialize_queues()

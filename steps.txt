@@ -1,0 +1,96 @@
+conda create -n rvc python=3.9
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+conda install pip=24.0
+pip install -r requirements.txt
+inner\modules\vc:25 +++with safe_globals([fairseq.data.dictionary.Dictionary])
+fairseq\dataclass\configs.py:1080 help -> 'help'
+infer\lib\infer_pack\commons.py:107 ---@torch.jit.script(已回滚)
+
+步骤 1：下载嵌入式 Python（Embedded Python）
+嵌入式 Python 是一个精简、可移植的 Python 发行版，专为打包和分发设计。
+
+访问 Python 官方下载页面：
+https://www.python.org/downloads/windows/（以 Windows 为例）
+向下滚动到 "Files" 部分，找到：
+Windows embeddable package (64-bit) 或 32位版本
+下载类似 python-3.11.9-embed-amd64.zip 的文件
+解压这个 ZIP 文件到你的项目目录，例如：
+text
+编辑
+your_project/
+├── runtime/
+│   └── python-3.11.9-embed-amd64/  ← 解压到这里
+├── src/            ← 你的代码
+├── requirements.txt
+└── run.bat
+步骤 2：启用嵌入式 Python 的包管理
+嵌入式 Python 默认禁用 import site，需要修改配置。
+
+进入 runtime/python-3.11.9-embed-amd64/ 目录，找到以下文件：
+
+python311._pth（根据版本不同，可能是 python3._pth）
+python.exe
+编辑 python311._pth，取消注释或添加以下行（确保包含 site-packages）：
+
+ini
+编辑
+python311.zip
+.
+.\Lib
+.\Lib\site-packages
+⚠️ 注意：.pth 文件是纯文本，确保换行符正确。
+
+步骤 3：安装依赖到 site-packages
+创建 runtime/python-3.11.9-embed-amd64/Lib/site-packages 目录（如果不存在）
+使用 pip 安装依赖： 由于嵌入式 Python 没有自带 pip，你需要先安装：
+bash
+编辑
+# 进入 runtime 目录
+cd runtime/python-3.11.9-embed-amd64
+
+# 下载 get-pip.py
+curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+
+# 安装 pip
+python.exe get-pip.py
+
+# 现在可以安装你的依赖
+python.exe -m pip install -r ../../requirements.txt
+或者逐个安装：
+bash
+编辑
+python.exe -m pip install requests flask numpy
+所有包都会安装到 site-packages 目录中。
+步骤 4：复制你的项目代码
+将你的项目代码复制到 runtime 目录下，例如：
+
+bash
+编辑
+cp -r ../../src/ ./src/
+或在 Windows：
+
+cmd
+编辑
+xcopy ..\src .\src\ /E /I
+结构如下：
+
+text
+编辑
+runtime/
+└── python-3.11.9-embed-amd64/
+    ├── python.exe
+    ├── python311.dll
+    ├── python311.zip
+    ├── Lib/
+    ├── Scripts/          ← pip 在这里
+    ├── src/              ← 你的代码
+    └── ...
+步骤 5：创建启动脚本
+Windows (run.bat)：
+
+bat
+编辑
+@echo off
+cd /d "%~dp0runtime\python-3.11.9-embed-amd64"
+python.exe src/main.py
+pause
