@@ -680,21 +680,36 @@ def get_stream_latency():
     except Exception as e:
         logger.error(f"Failed to get stream latency: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to get stream latency: {e}")
+    
+@app.get("/device_fingerprint", response_model=str)
+def get_device_fingerprint():
+    try:
+        return device_fingerprint()
+    except HTTPException as e:
+        logger.error(f"get device fingerprint error: {e.detail}", exc_info=True)
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get device fingerprint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get device fingerprint: {e}")
 
 if __name__ == "__main__":
-    if sys.platform == "win32":
-        freeze_support()
-    load_dotenv()
-    os.environ["OMP_NUM_THREADS"] = "4"
-    if sys.platform == "darwin":
-        os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-    
-    now_dir = os.getcwd()
-    sys.path.append(now_dir)
+    try:
+        if sys.platform == "win32":
+            freeze_support()
+        load_dotenv()
+        os.environ["OMP_NUM_THREADS"] = "4"
+        if sys.platform == "darwin":
+            os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+        
+        now_dir = os.getcwd()
+        sys.path.append(now_dir)
 
-    from tools.torchgate import TorchGate
-    from infer.lib import rtrvc as rvc_for_realtime
-    from configs.config import Config
-    audio_api.config = Config()
-    audio_api.initialize_queues()
-    uvicorn.run(app, host="0.0.0.0", port=6242)
+        from tools.torchgate import TorchGate
+        from infer.lib import rtrvc as rvc_for_realtime
+        from configs.config import Config
+        from infer.lib.crypto import device_fingerprint
+        audio_api.config = Config()
+        audio_api.initialize_queues()
+        uvicorn.run(app, host="0.0.0.0", port=6242)
+    except Exception as e:
+        logger.error(f"Start web server error: {e}", exc_info=True)

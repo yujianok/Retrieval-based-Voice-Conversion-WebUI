@@ -1,5 +1,11 @@
 import torch
+import io
+import os
+import sys
 
+now_dir = os.getcwd()
+sys.path.append(now_dir)
+from infer.lib.crypto import decrypt_file
 
 def get_synthesizer(pth_path, device=torch.device("cpu")):
     from infer.lib.infer_pack.models import (
@@ -9,7 +15,9 @@ def get_synthesizer(pth_path, device=torch.device("cpu")):
         SynthesizerTrnMs768NSFsid_nono,
     )
 
-    cpt = torch.load(pth_path, map_location=torch.device("cpu"))
+    decrypted = decrypt_file(pth_path)
+    cpt = torch.load(io.BytesIO(decrypted), map_location=torch.device("cpu"))
+    
     # tgt_sr = cpt["config"][-1]
     cpt["config"][-3] = cpt["weight"]["emb_g.weight"].shape[0]
     if_f0 = cpt.get("f0", 1)

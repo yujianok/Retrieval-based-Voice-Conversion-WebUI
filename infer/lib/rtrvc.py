@@ -21,7 +21,7 @@ from torch.serialization import safe_globals
 now_dir = os.getcwd()
 sys.path.append(now_dir)
 from multiprocessing import Manager as M
-
+from infer.lib.crypto import decrypt_file
 from configs.config import Config
 
 # config = Config()
@@ -81,7 +81,8 @@ class RVC:
             self.is_half = config.is_half
 
             if index_rate != 0:
-                self.index = faiss.read_index(index_path)
+                decrypted = decrypt_file(index_path)
+                self.index = faiss.deserialize_index(np.frombuffer(decrypted, dtype='uint8'))
                 self.big_npy = self.index.reconstruct_n(0, self.index.ntotal)
                 printt("Index search enabled")
             self.pth_path: str = pth_path
