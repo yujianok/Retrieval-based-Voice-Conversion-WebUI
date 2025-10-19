@@ -455,32 +455,33 @@ class AudioAPI:
         for hostapi in hostapis:
             for device_idx in hostapi["devices"]:
                 devices[device_idx]["hostapi_name"] = hostapi["name"]
-        input_devices = [
-            f"{d['name']} ({d['hostapi_name']})"
-            for d in devices
-            if d["max_input_channels"] > 0
-        ]
-        output_devices = [
-            f"{d['name']} ({d['hostapi_name']})"
-            for d in devices
-            if d["max_output_channels"] > 0
-        ]
-        input_devices_indices = [
-            d["index"] if "index" in d else d["name"]
-            for d in devices
-            if d["max_input_channels"] > 0
-        ]
-        output_devices_indices = [
-            d["index"] if "index" in d else d["name"]
-            for d in devices
-            if d["max_output_channels"] > 0
-        ]
-        return (
-            input_devices,
-            output_devices,
-            input_devices_indices,
-            output_devices_indices,
-        )
+
+        input_devices = []
+        output_devices = []
+        input_devices_indices = []
+        output_devices_indices = []
+
+        for d in devices:
+            # 跳过 max_input_channels=0 或 max_output_channels=0
+            try:
+                # 测试能否打开输入流
+                if d["max_input_channels"] > 0:
+                    sd.InputStream(device=d["index"], channels=1).close()
+                    input_devices.append(f"{d['name']} ({d['hostapi_name']})")
+                    input_devices_indices.append(d["index"])
+            except Exception:
+                pass  # 输入不可用，跳过
+
+            try:
+                # 测试能否打开输出流
+                if d["max_output_channels"] > 0:
+                    sd.OutputStream(device=d["index"], channels=1).close()
+                    output_devices.append(f"{d['name']} ({d['hostapi_name']})")
+                    output_devices_indices.append(d["index"])
+            except Exception:
+                pass  # 输出不可用，跳过
+
+        return input_devices, output_devices, input_devices_indices, output_devices_indices
 
     def set_devices(self, input_device, output_device):
         (
