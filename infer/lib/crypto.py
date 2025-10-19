@@ -1,29 +1,17 @@
-import win32security
-import win32api
-import win32con
-
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP
 import binascii
 import os
+import sys
 
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 import hashlib
 
-def get_current_user_sid():
-    """
-    获取当前登录用户的SID
-    """
-    # 获取当前进程的访问令牌
-    process_token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_READ)
-    # 从令牌中获取用户信息
-    user_info = win32security.GetTokenInformation(process_token, win32security.TokenUser)
-    # 获取SID对象
-    sid = user_info[0]
-    # 转换为字符串格式
-    sid_string = win32security.ConvertSidToStringSid(sid)
-    return sid_string
+now_dir = os.getcwd()
+sys.path.append(now_dir)
+
+from infer.lib.hardware import get_hardware_fingerprint
 
 def load_public_key_from_file(file_path):
     """
@@ -43,12 +31,12 @@ def load_public_key_from_file(file_path):
     
     return public_key_pem
 
-def encrypt_sid_with_public_key(sid, public_key_pem):
+def encrypt_with_public_key(fingerprint, public_key_pem):
     """
     使用公钥加密SID
     """
     # 将SID字符串编码为字节
-    sid_bytes = sid.encode('utf-8')
+    sid_bytes = fingerprint.encode('utf-8')
     
     # 导入公钥
     rsa_key = RSA.import_key(public_key_pem)
@@ -62,10 +50,10 @@ def encrypt_sid_with_public_key(sid, public_key_pem):
     return encrypted_hex
 
 def device_fingerprint():
-    sid = get_current_user_sid()
+    fingerprint = get_hardware_fingerprint()['checksum']
     file_path = os.path.join(os.getcwd(), 'public_key.pem')
     public_key_pem = load_public_key_from_file(file_path)
-    encrypted_sid_hex = encrypt_sid_with_public_key(sid, public_key_pem)
+    encrypted_sid_hex = encrypt_with_public_key(fingerprint, public_key_pem)
 
     return encrypted_sid_hex
 
@@ -83,7 +71,7 @@ def decrypt_file(encrypted_file_path):
     使用设备指纹作为密码解密单个文件，返回解密后的数据在内存中的缓冲区
     """
     # 获取设备指纹作为密码
-    password = get_current_user_sid()
+    password = get_hardware_fingerprint()['checksum']
     
     # 从密码派生AES密钥
     key = derive_key_from_password(password)

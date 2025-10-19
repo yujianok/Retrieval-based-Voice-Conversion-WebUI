@@ -120,21 +120,24 @@ class AudioAPI:
 
     def load(self):
         input_devices, output_devices, _, _ = self.get_devices()
+        logger.info(f"Available input devices: {input_devices}")
+        logger.info(f"Available output devices: {output_devices}")
+
         try:
             with open("configs/config.json", "r", encoding='utf-8') as j:
                 data = json.load(j)
                 if data["sg_input_device"] not in input_devices:
-                    data["sg_input_device"] = input_devices[sd.default.device[0]]
+                    data["sg_input_device"] = input_devices[0]
                 if data["sg_output_device"] not in output_devices:
-                    data["sg_output_device"] = output_devices[sd.default.device[1]]
+                    data["sg_output_device"] = output_devices[0]
         except Exception as e:
             logger.error(f"Failed to load configuration: {e}")
             with open("configs/config.json", "w", encoding='utf-8') as j:
                 data = {
                     "pth_path": "",
                     "index_path": "",
-                    "sg_input_device": input_devices[sd.default.device[0]],
-                    "sg_output_device": output_devices[sd.default.device[1]],
+                    "sg_input_device": "",
+                    "sg_output_device": "",
                     "threhold": -60,
                     "pitch": 0,
                     "formant": 0.0,
@@ -446,42 +449,42 @@ class AudioAPI:
         total_time = time.perf_counter() - start_time
         logger.info(f"Infer time: {total_time:.2f}")
 
-    def get_devices(self, update: bool = True):
-        if update:
-            sd._terminate()
-            sd._initialize()
+    def get_devices(self):
         devices = sd.query_devices()
         hostapis = sd.query_hostapis()
-        for hostapi in hostapis:
+
+        # 找出 MME 接口的 hostapi
+        mme_hostapis = [h for h in hostapis if h["name"] == "MME"]
+        mme_device_indices = set()
+        for hostapi in mme_hostapis:
             for device_idx in hostapi["devices"]:
-                devices[device_idx]["hostapi_name"] = hostapi["name"]
+                mme_device_indices.add(device_idx)
 
         input_devices = []
         output_devices = []
         input_devices_indices = []
         output_devices_indices = []
 
-        for d in devices:
-            # 跳过 max_input_channels=0 或 max_output_channels=0
+        for idx in mme_device_indices:
+            d = devices[idx]
             try:
-                # 测试能否打开输入流
                 if d["max_input_channels"] > 0:
                     sd.InputStream(device=d["index"], channels=1).close()
-                    input_devices.append(f"{d['name']} ({d['hostapi_name']})")
+                    input_devices.append(d['name'])
                     input_devices_indices.append(d["index"])
             except Exception:
-                pass  # 输入不可用，跳过
+                pass
 
             try:
-                # 测试能否打开输出流
                 if d["max_output_channels"] > 0:
                     sd.OutputStream(device=d["index"], channels=1).close()
-                    output_devices.append(f"{d['name']} ({d['hostapi_name']})")
+                    output_devices.append(d['name'])
                     output_devices_indices.append(d["index"])
             except Exception:
-                pass  # 输出不可用，跳过
+                pass
 
         return input_devices, output_devices, input_devices_indices, output_devices_indices
+
 
     def set_devices(self, input_device, output_device):
         (
@@ -711,6 +714,6 @@ if __name__ == "__main__":
         from infer.lib.crypto import device_fingerprint
         audio_api.config = Config()
         audio_api.initialize_queues()
-        uvicorn.run(app, host="0.0.0.0", port=6242)
+        uvicorn.run(app, host="0.0.0.0", port=6242, access_log=False)
     except Exception as e:
         logger.error(f"Start web server error: {e}", exc_info=True)
