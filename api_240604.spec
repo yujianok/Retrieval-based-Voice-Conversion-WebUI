@@ -5,7 +5,7 @@ a = Analysis(
     ['api_240604.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets'), ('configs', 'configs'), ('i18n', 'i18n'), ('logs', 'logs'), ('ffmpeg.exe', '.'), ('ffprobe.exe', '.'), ('public_key.pem', '.')],
+    datas=[('assets/hubert', 'assets/hubert'), ('assets/rmvpe', 'assets/rmvpe'), ('assets/uvr5_weights', 'assets/uvr5_weights'), ('assets/Synthesizer_inputs.pth', 'assets/Synthesizer_inputs.pth'), ('configs', 'configs'), ('i18n', 'i18n'), ('logs', 'logs'), ('ffmpeg.exe', '.'), ('ffprobe.exe', '.'), ('public_key.pem', '.')],
     hiddenimports=[],
     hookspath=['pyinstaller_hooks'],
     hooksconfig={},
