@@ -22,6 +22,8 @@ import logging
 from multiprocessing import Queue, Process, cpu_count, freeze_support
 import soundfile as sf  # 用于保存音频文件
 
+os.chdir(sys._MEIPASS)
+
 # Initialize the logger
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
