@@ -22,7 +22,11 @@ import logging
 from multiprocessing import Queue, Process, cpu_count, freeze_support
 import soundfile as sf  # 用于保存音频文件
 
-os.chdir(sys._MEIPASS)
+try:
+    os.chdir(sys._MEIPASS)
+except AttributeError:
+    # 说明不是 PyInstaller 打包环境，跳过
+    pass
 
 # Initialize the logger
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -636,10 +640,12 @@ def start_conversion():
             raise HTTPException(status_code=400, detail="Audio conversion already running")
     except HTTPException as e:
         logger.error(f"Start conversion error: {e.detail}", exc_info=True)
+        stop_conversion()
         raise
     except Exception as e:
         logger.error(f"Failed to start conversion: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to start conversion: {e}")
+        stop_conversion()
+        raise HTTPException(status_code=500, detail=f"Failed to start conversion: {e}")
 
 @app.post("/stop")
 def stop_conversion():
@@ -653,7 +659,7 @@ def stop_conversion():
         raise
     except Exception as e:
         logger.error(f"Failed to stop conversion: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to stop conversion: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to stop conversion: {e}")
 
 @app.get("/convert_audio_file")
 def convert_audio_file(input_file_path: str):
@@ -668,7 +674,7 @@ def convert_audio_file(input_file_path: str):
         raise
     except Exception as e:
         logger.error(f"Failed to start conversion: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to start conversion: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start conversion: {e}")
     finally:
         audio_api.flag_vc = False
 
@@ -685,7 +691,7 @@ def get_stream_latency():
         raise
     except Exception as e:
         logger.error(f"Failed to get stream latency: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to get stream latency: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get stream latency: {e}")
     
 @app.get("/device_fingerprint", response_model=str)
 def get_device_fingerprint():
@@ -696,7 +702,7 @@ def get_device_fingerprint():
         raise
     except Exception as e:
         logger.error(f"Failed to get device fingerprint: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to get device fingerprint: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get device fingerprint: {e}")
 
 if __name__ == "__main__":
     try:
@@ -709,6 +715,11 @@ if __name__ == "__main__":
         
         now_dir = os.getcwd()
         sys.path.append(now_dir)
+
+        import asyncio
+        asyncio.set_event_loop_policy(
+            asyncio.WindowsSelectorEventLoopPolicy()
+        )
 
         from tools.torchgate import TorchGate
         from infer.lib import rtrvc as rvc_for_realtime

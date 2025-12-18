@@ -191,6 +191,7 @@ class RVC:
                 self.model_fcpe = last_rvc.model_fcpe
         except:
             printt(traceback.format_exc())
+            raise
 
     def change_key(self, new_key):
         self.f0_up_key = new_key
@@ -200,7 +201,8 @@ class RVC:
 
     def change_index_rate(self, new_index_rate):
         if new_index_rate != 0 and self.index_rate == 0:
-            self.index = faiss.read_index(self.index_path)
+            decrypted = decrypt_file(self.index_path)
+            self.index = faiss.deserialize_index(np.frombuffer(decrypted, dtype='uint8'))
             self.big_npy = self.index.reconstruct_n(0, self.index.ntotal)
             printt("Index search enabled")
         self.index_rate = new_index_rate

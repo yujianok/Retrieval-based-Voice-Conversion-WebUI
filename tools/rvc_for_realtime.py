@@ -389,7 +389,7 @@ class RVC:
                     )
                 else:
                     printt(
-                        "Invalid index. You MUST use added_xxxx.index but not trained_xxxx.index!"
+                        "Invalid index for realtime. You MUST use added_xxxx.index but not trained_xxxx.index!"
                     )
             else:
                 printt("Index search FAILED or disabled")
